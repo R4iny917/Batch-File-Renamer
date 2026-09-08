@@ -6,15 +6,17 @@ Windows 11 中文桌面工具：先预览新名字，再确认批量改名，支
 
 ## 现在怎么打开
 
-双击项目根目录的 **start.cmd**。当前电脑的项目环境已准备好，无需额外安装。
+下载便携版 ZIP 并完整解压，打开文件夹，双击 **Batch File Renamer.exe**。无需安装 Python、配置环境或输入命令，也不会显示命令行黑窗口。
 
-也可以在项目目录打开 PowerShell，执行：
+请保留 EXE 旁边的 `_internal` 文件夹；发送给别人时发送整个 ZIP。可以为 EXE 创建桌面快捷方式。当前便携包面向 Windows 10/11 x64，已在 Windows 11 验证。
+
+开发者从源码运行时，可以使用 `start.cmd`，或在项目目录打开 PowerShell，执行：
 
 ```powershell
 & .\.venv\Scripts\python.exe -m renamer
 ```
 
-启动器的命令行窗口会随工具一起保留，便于看到异常；使用完工具后可以关闭它。
+源码启动器会保留命令行窗口，方便开发时查看异常。
 
 ## 使用步骤
 
@@ -50,7 +52,7 @@ Windows 11 中文桌面工具：先预览新名字，再确认批量改名，支
 - 批量文件系统操作不是一个原子事务。操作期间请勿让其他程序修改同一批文件；进程被强制结束或系统断电后无法自动恢复。
 - 长路径是否可操作取决于 Windows 和所在文件系统，失败会在预览或执行结果中报告。
 
-## 在其他电脑准备环境
+## 开发环境（仅修改源码时需要）
 
 需要 Windows 和 Python 3.11 或更高版本。在项目目录执行：
 
@@ -68,6 +70,19 @@ py -3 -m venv .venv
 
 当前 `.venv` 基于 Codex 自带 Python 3.12 创建，依赖该基础运行时所在路径。移动项目、换电脑或运行时被清理后，应重新创建虚拟环境；不要复制 `.venv` 作为安装包。所有项目依赖只安装在 `.venv`，没有修改系统 PATH。
 
+## 构建 Windows 便携版
+
+在 Windows x64 的项目虚拟环境中执行：
+
+```powershell
+& .\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+& .\.venv\Scripts\python.exe build.py
+```
+
+输出：`dist/Batch File Renamer/Batch File Renamer.exe` 和 `dist/Batch File Renamer-Windows-x64.zip`。构建会从现有 SVG 生成多尺寸 EXE 图标，并打包 Python、Qt 及所需资源。构建产物不加入 Git。
+
+当前版本未进行代码签名，Windows 在首次打开下载的程序时可能显示发布者未知提示。
+
 ## 验证
 
 ```powershell
@@ -84,4 +99,3 @@ py -3 -m venv .venv
 - `renamer/windows.py`：通过 Windows 文件句柄锁定并改名，禁止覆盖。
 - `renamer/app.py`：中文界面及后台操作线程。
 - `tests/`：自动化测试。
-- `docs/superpowers/`：设计与实施记录。

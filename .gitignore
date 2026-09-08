@@ -2,3 +2,6 @@
 __pycache__/
 *.py[cod]
 artifacts/
+build/
+dist/
+docs/superpowers/

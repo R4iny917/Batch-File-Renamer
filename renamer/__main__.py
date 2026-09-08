@@ -1,3 +1,3 @@
-from .app import main
+from renamer.app import main
 
 raise SystemExit(main())
