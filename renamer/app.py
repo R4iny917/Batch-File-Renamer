@@ -2,48 +2,19 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QLibraryInfo, QThread, Qt, QTranslator
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
-    QApplication, QAbstractItemView, QCheckBox, QFileDialog, QFrame,
+    QApplication, QAbstractItemView, QFileDialog, QFrame,
     QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget, QScrollArea, QSizePolicy,
 )
 
 from .core import Rules, build_preview, path_key
 from .operations import RenameSession, Result
 
 
-STYLE = """
-QMainWindow, QWidget#content { background: #F2F5F7; color: #182D3B; }
-QWidget { font-family: 'Microsoft YaHei UI'; font-size: 13px; }
-QLabel { color: #182D3B; background: transparent; }
-QLabel#title { font-size: 27px; font-weight: 700; }
-QLabel#subtitle, QLabel#hint { color: #637783; }
-QLabel#section { font-weight: 700; font-size: 14px; }
-QLabel#status { padding: 12px 14px; background: #E1ECEF; border-radius: 6px; }
-QFrame#rules { background: #FFFFFF; border: 1px solid #D6E0E5; border-radius: 8px; }
-QLineEdit, QSpinBox { background: #FAFCFD; color: #182D3B; border: 1px solid #BCCBD4;
-    border-radius: 5px; min-height: 30px; padding: 2px 9px; selection-background-color: #136F7A; }
-QLineEdit:focus, QSpinBox:focus { border: 2px solid #136F7A; }
-QPushButton { background: #FFFFFF; color: #243D4B; border: 1px solid #BCCBD4;
-    border-radius: 5px; padding: 9px 17px; font-weight: 600; }
-QPushButton:hover { background: #EAF1F4; border-color: #738F9F; }
-QPushButton:focus { border: 2px solid #136F7A; }
-QPushButton:disabled { color: #94A2AA; background: #EDF1F3; border-color: #D8E0E5; }
-QPushButton#primary { background: #136F7A; color: #FFFFFF; border-color: #136F7A; }
-QPushButton#primary:hover { background: #0E5861; }
-QPushButton#primary:disabled { background: #ACBFC3; border-color: #ACBFC3; color: #F5F8F9; }
-QPushButton#recovery { color: #A13337; border-color: #C98689; }
-QTableWidget { background: #FFFFFF; alternate-background-color: #F8FAFB; color: #182D3B;
-    border: 1px solid #D6E0E5; border-radius: 6px; gridline-color: #E8EEF1;
-    selection-background-color: #D1E7EC; selection-color: #123B46; }
-QHeaderView::section { background: #E7EEF2; color: #3C5564; border: none;
-    border-bottom: 1px solid #CEDAE1; padding: 12px 10px; font-weight: 600; }
-QCheckBox { color: #243D4B; spacing: 8px; }
-QCheckBox::indicator { width: 17px; height: 17px; }
-QToolTip { background: #FFFFFF; color: #182D3B; border: 1px solid #BCCBD4; padding: 6px; }
-"""
+from .widgets import STYLE, NumberStepper, DigitSelector, Toggle, PreviewDelegate, line_icon
 
 
 class Worker(QThread):
@@ -62,12 +33,12 @@ class Worker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("批量改名工具")
-        self.resize(1120, 780)
-        self.setMinimumSize(880, 660)
+        self.setWindowTitle("Batch File Renamer")
+        self.setWindowIcon(QIcon(str(Path(__file__).parent / "assets" / "app.svg")))
+        self.resize(1200, 790)
+        self.setMinimumSize(980, 650)
         self.setStyleSheet(STYLE)
-        self.paths = []
-        self.rows = []
+        self.paths, self.rows = [], []
         self.session = RenameSession()
         self.busy = False
         self.worker = None
@@ -75,113 +46,142 @@ class MainWindow(QMainWindow):
         self.content = QWidget(objectName="content")
         self.setCentralWidget(self.content)
         layout = QVBoxLayout(self.content)
-        layout.setContentsMargins(28, 24, 28, 22)
-        layout.setSpacing(16)
-
+        layout.setContentsMargins(26, 22, 26, 20)
+        layout.setSpacing(22)
         heading = QHBoxLayout()
-        text = QVBoxLayout()
-        text.addWidget(QLabel("批量改名", objectName="title"))
-        text.addWidget(QLabel("先看清每一个新名字，再统一改名。", objectName="subtitle"))
-        heading.addLayout(text)
+        heading.addWidget(QLabel("批量改名", objectName="title"))
+        heading.addSpacing(8)
+        heading.addWidget(QLabel("每一个新名字，都先预览", objectName="subtitle"))
         heading.addStretch()
-        self.add_button = QPushButton("添加文件")
+        self.add_button = QPushButton("＋  添加文件", objectName="primary")
         self.add_button.clicked.connect(self.choose_files)
         heading.addWidget(self.add_button)
         layout.addLayout(heading)
 
-        panel = QFrame(objectName="rules")
-        grid = QGridLayout(panel)
-        grid.setContentsMargins(18, 16, 18, 16)
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(10)
-        grid.addWidget(QLabel("改名规则", objectName="section"), 0, 0, 1, 4)
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        rules_scroll = QScrollArea()
+        rules_scroll.setWidgetResizable(True)
+        rules_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        rules_scroll.setFixedWidth(334)
+        rules_scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        panel = QFrame(objectName="panel")
+        rules_scroll.setWidget(panel)
+        rules = QVBoxLayout(panel)
+        rules.setContentsMargins(20, 18, 20, 20)
+        rules.setSpacing(9)
+        rule_heading = QHBoxLayout()
+        rule_heading.addWidget(QLabel("改名规则", objectName="section"))
+        rule_heading.addStretch()
+        reset = QPushButton("重置", objectName="quiet")
+        reset.setIcon(line_icon("refresh"))
+        reset.clicked.connect(self.reset_rules)
+        rule_heading.addWidget(reset)
+        rules.addLayout(rule_heading)
         self.find = QLineEdit(placeholderText="要替换的文字")
         self.replacement = QLineEdit(placeholderText="留空则删除匹配文字")
         self.prefix = QLineEdit(placeholderText="例如：旅行_")
         self.suffix = QLineEdit(placeholderText="例如：_精选")
-        for column, (label, field) in enumerate([
-            ("查找", self.find), ("替换为", self.replacement),
-            ("前缀", self.prefix), ("后缀", self.suffix),
-        ]):
-            caption = QLabel(label)
-            caption.setBuddy(field)
-            grid.addWidget(caption, 1, column)
-            grid.addWidget(field, 2, column)
-            grid.setColumnStretch(column, 1)
-            field.textChanged.connect(self.refresh_preview)
-        number_line = QHBoxLayout()
-        number_line.setSpacing(12)
-        self.numbering = QCheckBox("追加编号")
-        self.start = QSpinBox()
-        self.start.setRange(0, 2_000_000_000)
-        self.start.setValue(1)
-        self.start.setFixedWidth(120)
-        self.start.setAccessibleName("起始编号")
-        self.digits = QSpinBox()
-        self.digits.setRange(1, 8)
-        self.digits.setValue(3)
-        self.digits.setFixedWidth(80)
-        self.digits.setAccessibleName("编号最少位数")
-        number_line.addWidget(self.numbering)
-        number_line.addWidget(QLabel("起始值"))
-        number_line.addWidget(self.start)
-        number_line.addWidget(QLabel("位数"))
-        number_line.addWidget(self.digits)
-        number_line.addWidget(QLabel("例：文件名_001.jpg", objectName="hint"))
-        number_line.addStretch()
-        reset = QPushButton("重置规则")
-        reset.clicked.connect(self.reset_rules)
-        number_line.addWidget(reset)
-        grid.addLayout(number_line, 3, 0, 1, 4)
-        hint = QLabel("按表格顺序编号 · 保留最后一个扩展名 · 仅在原目录内改名", objectName="hint")
-        grid.addWidget(hint, 4, 0, 1, 4)
-        self.numbering.toggled.connect(self.refresh_preview)
-        self.start.valueChanged.connect(self.refresh_preview)
-        self.digits.valueChanged.connect(self.refresh_preview)
-        layout.addWidget(panel)
+        for title, field in [("查找", self.find), ("替换为", self.replacement)]:
+            label = QLabel(title)
+            label.setBuddy(field)
+            rules.addWidget(label)
+            rules.addWidget(field)
+        pair = QGridLayout()
+        pair.setHorizontalSpacing(12)
+        for col, (title, field) in enumerate([("前缀（可选）", self.prefix), ("后缀（可选）", self.suffix)]):
+            label = QLabel(title)
+            label.setBuddy(field)
+            pair.addWidget(label, 0, col)
+            pair.addWidget(field, 1, col)
+        rules.addLayout(pair)
+        rules.addSpacing(4)
+        rules.addWidget(QFrame(objectName="divider"))
+        numbering_row = QHBoxLayout()
+        numbering_row.addWidget(QLabel("追加编号"))
+        numbering_row.addStretch()
+        self.numbering = Toggle()
+        numbering_row.addWidget(self.numbering)
+        rules.addLayout(numbering_row)
+        rules.addWidget(QLabel("在文件名末尾添加递增编号", objectName="hint"))
+        self.start = NumberStepper()
+        self.digits = DigitSelector()
+        for title, field in [("起始值", self.start), ("编号位数", self.digits)]:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(title))
+            row.addStretch()
+            field.setFixedWidth(214)
+            row.addWidget(field)
+            rules.addLayout(row)
+        self.example = QLabel("", objectName="hint")
+        self.example.setWordWrap(True)
+        rules.addWidget(self.example)
+        rules.addStretch()
+        rules.addSpacing(10)
+        rules.addWidget(QLabel("保留扩展名（如 .jpg、.png）", objectName="hint"))
+        rules.addWidget(QLabel("仅在原目录内改名", objectName="hint"))
+        body.addWidget(rules_scroll)
 
-        table_actions = QHBoxLayout()
-        self.count = QLabel("文件预览", objectName="section")
-        table_actions.addWidget(self.count)
-        table_actions.addStretch()
-        refresh = QPushButton("刷新预览")
+        preview = QFrame(objectName="panel")
+        preview_layout = QVBoxLayout(preview)
+        preview_layout.setContentsMargins(1, 12, 1, 8)
+        preview_layout.setSpacing(8)
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(18, 0, 12, 2)
+        toolbar.addWidget(QLabel("文件预览", objectName="section"))
+        self.count = QLabel("", objectName="hint")
+        toolbar.addWidget(self.count)
+        toolbar.addStretch()
+        refresh = QPushButton("刷新", objectName="quiet")
+        refresh.setIcon(line_icon("refresh"))
         refresh.clicked.connect(self.refresh_preview)
-        table_actions.addWidget(refresh)
-        self.remove_button = QPushButton("移除选中")
+        toolbar.addWidget(refresh)
+        self.remove_button = QPushButton("移除选中", objectName="quiet")
+        self.remove_button.setIcon(line_icon("trash"))
         self.remove_button.clicked.connect(self.remove_selected)
-        table_actions.addWidget(self.remove_button)
-        self.clear_button = QPushButton("清空列表")
+        toolbar.addWidget(self.remove_button)
+        self.clear_button = QPushButton("清空", objectName="quiet")
+        self.clear_button.setIcon(line_icon("trash"))
         self.clear_button.clicked.connect(lambda: self.set_paths([]))
-        table_actions.addWidget(self.clear_button)
-        layout.addLayout(table_actions)
+        toolbar.addWidget(self.clear_button)
+        preview_layout.addLayout(toolbar)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["原文件名", "新文件名", "所在目录", "状态"])
+        self.table.setColumnHidden(2, True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
         self.table.setSortingEnabled(False)
+        self.table.setItemDelegate(PreviewDelegate(self.table))
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(42)
+        self.table.verticalHeader().setDefaultSectionSize(68)
         header = self.table.horizontalHeader()
-        for column in (0, 1, 2):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(3, 170)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(3, 114)
         self.table.itemSelectionChanged.connect(self.update_buttons)
-        layout.addWidget(self.table, 1)
-        self.empty = QLabel("列表还是空的。点击右上角“添加文件”，开始预览。", objectName="hint")
+        preview_layout.addWidget(self.table, 1)
+        self.empty = QLabel("添加文件，预览每一个新名字", objectName="hint", parent=self.table.viewport())
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.empty)
-        self.status = QLabel("添加文件后，设置规则即可看到新名字。", objectName="status")
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        empty_layout = QVBoxLayout(self.table.viewport())
+        empty_layout.addWidget(self.empty)
+        self.empty.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        body.addWidget(preview, 1)
+        layout.addLayout(body, 1)
+        layout.addWidget(QFrame(objectName="divider"))
         footer = QHBoxLayout()
-        footer.addWidget(QLabel("撤销仅在本次打开期间有效", objectName="hint"))
-        footer.addStretch()
-        self.details_button = QPushButton("查看错误详情")
+        status_group = QVBoxLayout()
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        status_group.addWidget(self.status)
+        status_group.addWidget(QLabel("撤销仅在本次打开期间有效", objectName="hint"))
+        footer.addLayout(status_group, 1)
+        self.details_button = QPushButton("错误详情", objectName="quiet")
         self.details_button.clicked.connect(self.show_details)
         footer.addWidget(self.details_button)
         self.recover_button = QPushButton("重试恢复", objectName="recovery")
@@ -194,6 +194,11 @@ class MainWindow(QMainWindow):
         self.execute_button.clicked.connect(self.request_execute)
         footer.addWidget(self.execute_button)
         layout.addLayout(footer)
+        for field in (self.find, self.replacement, self.prefix, self.suffix):
+            field.textChanged.connect(self.refresh_preview)
+        self.numbering.toggled.connect(self.refresh_preview)
+        self.start.valueChanged.connect(self.refresh_preview)
+        self.digits.valueChanged.connect(self.refresh_preview)
         self.refresh_preview()
 
     def choose_files(self):
@@ -246,18 +251,28 @@ class MainWindow(QMainWindow):
                     item.setBackground(QColor("#EDF7F7"))
                 if column == 3 and row.error:
                     item.setForeground(QColor("#B03840"))
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, str(row.source.parent))
+                elif column == 1:
+                    item.setData(Qt.ItemDataRole.UserRole, row.changed)
+                elif column == 3:
+                    item.setData(Qt.ItemDataRole.UserRole, bool(row.error))
                 self.table.setItem(index, column, item)
         total = len(self.rows)
         conflicts = sum(bool(row.error) for row in self.rows)
         changed = sum(row.changed and not row.error for row in self.rows)
-        self.count.setText(f"文件预览   {total} 个文件 · {changed} 个待改名 · {conflicts} 个错误")
+        self.count.setText(f"{total} 个文件")
+        self.execute_button.setText(f"执行改名（{changed}）" if changed else "执行改名")
+        sample = self.rows[0].target.name if self.rows and not self.rows[0].error else "文件名_001.jpg"
+        self.example.setText(f"示例：{sample}")
         self.empty.setVisible(not total)
+        self.status.setStyleSheet("color: #149447; font-weight: 600;" if changed and not conflicts else "color: #71809A;")
         if not total:
             self.status.setText("添加文件后，设置规则即可看到新名字。")
         elif conflicts:
             self.status.setText(f"有 {conflicts} 个文件需要处理，请查看状态列，修改规则或移除对应行。")
         elif changed:
-            self.status.setText(f"预览已更新。确认右侧的新名字后，可执行 {changed} 个文件的改名。")
+            self.status.setText(f"{changed} 个文件可改名 · 无冲突")
         else:
             self.status.setText("当前规则没有改变文件名。可以设置替换、前后缀或追加编号。")
         self.start.setEnabled(self.numbering.isChecked())
@@ -327,6 +342,7 @@ class MainWindow(QMainWindow):
         else:
             self.refresh_preview()
         self.status.setText(result.message)
+        self.status.setStyleSheet("color: #149447;" if result.ok else "color: #B63B49;")
         self.update_buttons()
         if result.errors:
             self.show_details()
@@ -357,6 +373,9 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("BatchFileRenamer.Desktop")
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setFont(QFont("Microsoft YaHei UI", 10))
@@ -365,4 +384,8 @@ def main():
         app.installTranslator(translator)
     window = MainWindow()
     window.show()
+    if sys.platform == "win32":
+        light_titlebar = ctypes.c_int(0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(int(window.winId())), 20,
+                                                  ctypes.byref(light_titlebar), ctypes.sizeof(light_titlebar))
     return app.exec()

@@ -52,6 +52,22 @@ class AppTests(unittest.TestCase):
         self.assertFalse(self.window.execute_button.isEnabled())
         self.assertTrue(self.window.rows[0].error)
 
+    def test_modern_number_controls_update_preview_and_reset(self):
+        self.window.add_paths([self.source])
+        self.window.numbering.setChecked(True)
+        self.window.start.plus.click()
+        self.window.digits.buttons[4].click()
+        self.assertEqual(self.window.table.item(0, 1).text(), "照片_0002.JPG")
+        self.window.start.setValue(0)
+        self.window.start.minus.click()
+        self.assertEqual(self.window.start.value(), 0)
+        self.window.digits.setValue(8)
+        self.assertEqual(self.window.table.item(0, 1).text(), "照片_00000000.JPG")
+        self.window.reset_rules()
+        self.assertEqual(self.window.start.value(), 1)
+        self.assertEqual(self.window.digits.value(), 3)
+        self.assertFalse(self.window.start.isEnabled())
+
     def test_cancel_does_not_rename(self):
         self.window.add_paths([self.source])
         self.window.prefix.setText("x")
