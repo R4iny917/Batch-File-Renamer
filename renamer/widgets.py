@@ -1,25 +1,34 @@
-from PySide6.QtCore import QByteArray, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QByteArray, QRectF, Qt, Signal, Property, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QLinearGradient, QPalette
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QCheckBox, QHBoxLayout, QMenu, QPushButton,
-    QSpinBox, QStyledItemDelegate, QStyle, QWidget,
+    QAbstractSpinBox, QCheckBox, QHBoxLayout, QComboBox, QPushButton,
+    QSpinBox, QStyledItemDelegate, QStyle, QWidget, QSizePolicy, QScrollArea, QLineEdit, QMessageBox, QTextEdit,
 )
 
 
 STYLE = """
-QWidget { font-family: 'Microsoft YaHei UI'; font-size: 13px; color: #17243B; }
+QWidget { font-family: 'Microsoft YaHei UI'; font-size: 14px; color: #17243B; }
 QMainWindow, QWidget#content { background: #F7F9FC; }
 QLabel { background: transparent; }
-QLabel#title { font-size: 30px; font-weight: 700; }
-QLabel#section { font-size: 19px; font-weight: 600; }
-QLabel#hint, QLabel#subtitle { color: #7C889B; }
+QLabel#title { font-size: 21px; font-weight: 700; }
+QLabel#section { font-size: 15px; font-weight: 600; }
+QLabel#hint, QLabel#subtitle { color: #626D7D; font-size: 13px; }
+QLabel#example { color: #2864F5; font-weight: 600; }
+QFrame#sample { background: #F8FAFC; border: none; border-top: 1px solid #EDF0F5; border-radius: 0; }
 QLabel#subtitle { font-size: 14px; }
 QFrame#panel { background: white; border: 1px solid #E1E7F0; border-radius: 10px; }
-QFrame#divider { background: #EDF0F5; border: none; max-height: 1px; }
+QFrame#divider { background: #EDF0F5; border: none; min-height: 1px; max-height: 1px; }
 QLineEdit, QSpinBox { background: #FBFCFE; border: 1px solid #D8E0EC; border-radius: 7px;
     min-height: 36px; padding: 0 11px; selection-background-color: #3867ED; }
 QLineEdit:focus, QSpinBox:focus { border: 1px solid #3867ED; background: white; }
+QWidget#rulesContent, QScrollArea#rulesScroll { background: white; border: none; }
+QWidget#rulesContent QLineEdit { min-height: 34px; border-radius: 6px; }
+QComboBox { background: #FBFCFE; border: 1px solid #D8E0EC; border-radius: 6px; min-height: 36px; padding-left: 10px; }
+QComboBox:focus { border-color: #3867ED; }
+QComboBox::drop-down { border: none; width: 26px; }
+QComboBox QAbstractItemView { background: white; selection-background-color: #E9F0FF; selection-color: #2864F5; }
+
 QPushButton { background: white; border: 1px solid #D8E0EC; border-radius: 7px;
     padding: 10px 15px; font-weight: 500; }
 QPushButton:hover { background: #F0F5FF; border-color: #B6C9F8; }
@@ -49,6 +58,108 @@ QToolTip { background: white; color: #17243B; border: 1px solid #D8E0EC; padding
 """
 
 
+class AppMessageBox(QMessageBox):
+    def __init__(self, parent):
+        super().__init__(parent)
+        palette = self.palette()
+        for role, color in (
+            (QPalette.ColorRole.Window, "#FFFFFF"),
+            (QPalette.ColorRole.WindowText, "#17243B"),
+            (QPalette.ColorRole.Base, "#F7F9FC"),
+            (QPalette.ColorRole.Text, "#17243B"),
+            (QPalette.ColorRole.Button, "#FFFFFF"),
+            (QPalette.ColorRole.ButtonText, "#17243B"),
+        ):
+            palette.setColor(role, QColor(color))
+        self.setPalette(palette)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setStyleSheet(STYLE + """
+            QMessageBox { background: white; }
+            QMessageBox QLabel { color: #17243B; }
+            QMessageBox QLabel#qt_msgbox_label { font-size: 16px; font-weight: 600; }
+            QMessageBox QLabel#qt_msgbox_informativelabel { color: #626D7D; font-size: 13px; }
+            QMessageBox QPushButton { min-width: 76px; }
+            QMessageBox QTextEdit { background: #F7F9FC; color: #17243B;
+                border: 1px solid #D8E0EC; border-radius: 6px; padding: 8px; }
+        """)
+
+    def setDetailedText(self, text):
+        super().setDetailedText(text)
+        for button in self.buttons():
+            if self.buttonRole(button) == QMessageBox.ButtonRole.ActionRole:
+                button.setText("展开详情")
+                button.clicked.connect(lambda checked=False, button=button: button.setText(
+                    "收起详情" if self.findChild(QTextEdit).isVisible() else "展开详情"))
+
+    def showEvent(self, event):
+        for button in self.buttons():
+            button.style().unpolish(button)
+            button.style().polish(button)
+        super().showEvent(event)
+        import sys
+        if sys.platform == "win32":
+            import ctypes
+            light = ctypes.c_int(0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(int(self.winId())), 20, ctypes.byref(light), ctypes.sizeof(light))
+
+
+class FilenameEdit(QLineEdit):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.setReadOnly(True)
+        self.setCursor(Qt.CursorShape.IBeamCursor)
+
+    def focusOutEvent(self, event):
+        start, end = self.selectionStart(), self.selectionEnd()
+        super().focusOutEvent(event)
+        if start >= 0:
+            self.setSelection(start, end - start)
+
+
+class ScrollEdges(QWidget):
+    def __init__(self, scroll):
+        super().__init__(scroll.viewport())
+        self.scroll = scroll
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def paintEvent(self, event):
+        bar = self.scroll.verticalScrollBar()
+        painter = QPainter(self)
+        depth = min(24, self.height() // 4)
+        for distance, edge, direction in (
+            (bar.value() - bar.minimum(), 0, 1),
+            (bar.maximum() - bar.value(), self.height(), -1),
+        ):
+            if distance <= 0 or depth <= 0:
+                continue
+            gradient = QLinearGradient(0, edge, 0, edge + direction * depth)
+            opacity = min(1.0, distance / depth)
+            gradient.setColorAt(0, QColor(255, 255, 255, round(255 * opacity)))
+            gradient.setColorAt(0.35, QColor(255, 255, 255, round(210 * opacity)))
+            gradient.setColorAt(1, QColor(255, 255, 255, 0))
+            painter.fillRect(QRectF(0, min(edge, edge + direction * depth), self.width(), depth), gradient)
+
+
+class RulesScrollArea(QScrollArea):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.edges = ScrollEdges(self)
+        self.verticalScrollBar().valueChanged.connect(self.update_edges)
+        self.verticalScrollBar().rangeChanged.connect(self.update_edges)
+
+    def update_edges(self, *args):
+        self.edges.setGeometry(self.viewport().rect())
+        self.edges.raise_()
+        self.edges.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_edges()
+
+
 class NumberStepper(QWidget):
     valueChanged = Signal(int)
 
@@ -63,13 +174,16 @@ class NumberStepper(QWidget):
         self.minus.setAccessibleName("减小起始值")
         self.plus.setAccessibleName("增大起始值")
         self.editor = QSpinBox()
+        self.editor.setCursor(Qt.CursorShape.IBeamCursor)
         self.editor.setRange(0, 2_000_000_000)
+        self.editor.setMinimumWidth(0)
+        self.editor.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.editor.setValue(1)
         self.editor.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.editor.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.editor.setAccessibleName("起始编号")
         for button in (self.minus, self.plus):
-            button.setFixedSize(34, 38)
+            button.setFixedSize(26, 36)
             button.setAutoRepeat(True)
         layout.addWidget(self.minus)
         layout.addWidget(self.editor, 1)
@@ -85,69 +199,106 @@ class NumberStepper(QWidget):
         self.editor.setValue(value)
 
 
-class DigitSelector(QWidget):
+class DigitSelector(QComboBox):
     valueChanged = Signal(int)
 
     def __init__(self):
-        super().__init__(objectName="segments")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
-        self._value = 3
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(1, 1, 1, 1)
-        layout.setSpacing(0)
-        self.buttons = {}
-        for number in (2, 3, 4):
-            button = QPushButton(f"{number} 位", objectName="segment")
-            button.setCheckable(True)
-            button.clicked.connect(lambda checked=False, n=number: self.setValue(n))
-            self.buttons[number] = button
-            layout.addWidget(button, 1)
-        self.more = QPushButton("更多", objectName="segment")
-        self.more.setCheckable(True)
-        menu = QMenu(self.more)
-        for number in (1, 5, 6, 7, 8):
-            menu.addAction(f"{number} 位", lambda n=number: self.setValue(n))
-        self.more.setMenu(menu)
-        layout.addWidget(self.more, 1)
-        self.setValue(3)
+        super().__init__()
+        self.setAccessibleName("编号位数")
+        for number in range(1, 9):
+            self.addItem(f"{number} 位", number)
+        self.setCurrentIndex(2)
+        self.currentIndexChanged.connect(lambda: self.valueChanged.emit(self.value()))
 
     def value(self):
-        return self._value
+        return self.currentData()
 
     def setValue(self, value):
-        value = max(1, min(8, value))
-        changed = value != self._value
-        self._value = value
-        for number, button in self.buttons.items():
-            button.setChecked(number == value)
-        self.more.setChecked(value not in self.buttons)
-        self.more.setText(f"{value} 位" if value not in self.buttons else "更多")
-        if changed:
-            self.valueChanged.emit(value)
+        self.setCurrentIndex(max(1, min(8, value)) - 1)
+
+
+class Collapsible(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.expanded = False
+        self.setMaximumHeight(0)
+        self.setMinimumHeight(0)
+        self.setEnabled(False)
+        self.animation = QPropertyAnimation(self, b"maximumHeight", self)
+        self.animation.setDuration(220)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def setExpanded(self, expanded):
+        if expanded == self.expanded:
+            return
+        self.expanded = expanded
+        self.setEnabled(expanded)
+        self.animation.stop()
+        self.animation.setStartValue(self.maximumHeight())
+        self.animation.setEndValue(self.layout().sizeHint().height() if expanded else 0)
+        self.animation.start()
 
 
 class Toggle(QCheckBox):
     def __init__(self):
         super().__init__()
         self.setAccessibleName("追加编号")
-        self.setFixedSize(46, 28)
+        self.setFixedSize(46, 30)
+        self.keyboard_focus = False
+        self._progress = 0.0
+        self.animation = QPropertyAnimation(self, b"progress", self)
+        self.animation.setDuration(180)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.toggled.connect(self.sync_state)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    @Property(float)
+    def progress(self):
+        return self._progress
+
+    @progress.setter
+    def progress(self, value):
+        self._progress = value
+        self.update()
+
+    def sync_state(self):
+        target = float(self.isChecked())
+        if self.animation.endValue() == target and self.animation.state() == QPropertyAnimation.State.Running:
+            return
+        self.animation.stop()
+        self.animation.setStartValue(self.progress)
+        self.animation.setEndValue(target)
+        self.animation.start()
 
     def hitButton(self, pos):
         return self.rect().contains(pos)
+
+    def focusInEvent(self, event):
+        self.keyboard_focus = event.reason() in (Qt.FocusReason.TabFocusReason,
+                                                 Qt.FocusReason.BacktabFocusReason,
+                                                 Qt.FocusReason.ShortcutFocusReason)
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event):
+        self.keyboard_focus = False
+        super().focusOutEvent(event)
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#2864F5" if self.isChecked() else "#CBD5E3"))
-        painter.drawRoundedRect(QRectF(1, 3, 44, 24), 12, 12)
+        off, on = QColor("#CBD5E3"), QColor("#2864F5")
+        painter.setBrush(QColor(*[round(a + (b - a) * self.progress) for a, b in
+                                 zip(off.getRgb()[:3], on.getRgb()[:3])]))
+        painter.drawRoundedRect(QRectF(3, 4, 40, 22), 11, 11)
         painter.setBrush(QColor("white"))
-        painter.drawEllipse(QRectF(24 if self.isChecked() else 4, 6, 18, 18))
-        if self.hasFocus():
+        painter.drawEllipse(QRectF(5 + 18 * self.progress, 6, 18, 18))
+        if self.hasFocus() and self.keyboard_focus:
             painter.setPen(QColor("#2864F5"))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QRectF(0, 1, 45, 26), 13, 13)
+            painter.drawRoundedRect(QRectF(0.5, 1.5, 45, 27), 13.5, 13.5)
 
 
 def line_icon(name):

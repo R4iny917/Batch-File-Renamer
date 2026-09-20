@@ -6,6 +6,9 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from PySide6.QtCore import QRect, QEvent, Qt, QTimer
+from PySide6.QtGui import QFocusEvent
+from PySide6.QtTest import QTest
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 from renamer.app import MainWindow
@@ -52,11 +55,65 @@ class AppTests(unittest.TestCase):
         self.assertFalse(self.window.execute_button.isEnabled())
         self.assertTrue(self.window.rows[0].error)
 
+    def test_window_fits_small_screen_and_keeps_execute_visible(self):
+        self.window.show()
+        self.app.processEvents()
+        for area in (QRect(0, 0, 1280, 750), QRect(1280, 0, 900, 600)):
+            self.window.fit_to_available_area(area)
+            self.app.processEvents()
+            self.assertTrue(area.contains(self.window.frameGeometry()))
+            button = self.window.execute_button
+            position = button.mapTo(self.window, button.rect().bottomRight())
+            self.assertTrue(self.window.rect().contains(position))
+            self.assertLessEqual(self.window.width(), area.width() - 32)
+
+    def test_copy_original_name_and_paste_part_into_find(self):
+        self.window.add_paths([self.source])
+        self.window.table.setCurrentCell(0, 0)
+        self.assertEqual(self.window.original_name.text(), "照片")
+        self.assertTrue(self.window.original_name.isReadOnly())
+        self.window.original_name.setSelection(0, 2)
+        self.window.original_name.copy()
+        self.window.find.paste()
+        self.window.replacement.setText("旅行")
+        self.assertEqual(self.window.table.item(0, 1).text(), "旅行.JPG")
+        self.assertEqual(self.source.read_bytes(), b"photo")
+
+    def test_sidebar_keeps_example_visible_when_numbering_scrolls(self):
+        self.window.show()
+        self.window.resize(810, 488)
+        self.window.numbering.setChecked(True)
+        QTest.qWait(260)
+        self.app.processEvents()
+        scroll = self.window.rules_scroll
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        self.app.processEvents()
+        self.assertFalse(scroll.isAncestorOf(self.window.example))
+        self.assertTrue(self.window.example.isVisible())
+        for control in (self.window.start, self.window.digits):
+            position = control.mapTo(scroll.viewport(), control.rect().bottomRight())
+            self.assertTrue(scroll.viewport().rect().contains(position))
+        self.assertTrue(self.window.start.isEnabled())
+        self.window.numbering.setChecked(False)
+        self.assertFalse(self.window.start.isEnabled())
+
+    def test_copy_selected_original_names_and_clear_selection(self):
+        second = self.root / "second.txt"
+        second.write_bytes(b"second")
+        self.window.add_paths([self.source, second])
+        self.window.table.selectAll()
+        self.window.copy_name_action.trigger()
+        self.assertEqual(self.app.clipboard().text(), "照片.JPG\nsecond.txt")
+        self.window.set_paths([])
+        self.assertEqual(self.window.original_name.text(), "")
+        self.window.copy_name_action.trigger()
+        self.assertEqual(self.app.clipboard().text(), "照片.JPG\nsecond.txt")
+
     def test_modern_number_controls_update_preview_and_reset(self):
         self.window.add_paths([self.source])
         self.window.numbering.setChecked(True)
         self.window.start.plus.click()
-        self.window.digits.buttons[4].click()
+        self.window.digits.setCurrentIndex(3)
         self.assertEqual(self.window.table.item(0, 1).text(), "照片_0002.JPG")
         self.window.start.setValue(0)
         self.window.start.minus.click()
@@ -68,10 +125,79 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.window.digits.value(), 3)
         self.assertFalse(self.window.start.isEnabled())
 
+    def test_fill_find_uses_only_selected_substring(self):
+        self.window.add_paths([self.source])
+        self.window.table.setCurrentCell(0, 0)
+        self.window.original_name.setSelection(0, 1)
+        self.window.fill_find_button.click()
+        self.assertEqual(self.window.find.text(), "照")
+        self.window.replacement.setText("旅")
+        self.assertEqual(self.window.rows[0].target.name, "旅片.JPG")
+        self.window.original_name.deselect()
+        self.window.fill_find_button.click()
+        self.assertEqual(self.window.find.text(), "照")
+        self.assertIn("请先", self.window.name_feedback.text())
+
+    def test_fill_find_preserves_selection_after_native_focus_loss(self):
+        self.window.add_paths([self.source])
+        self.window.table.setCurrentCell(0, 0)
+        for reason in (Qt.FocusReason.MouseFocusReason, Qt.FocusReason.TabFocusReason):
+            self.window.original_name.setSelection(0, 1)
+            self.app.sendEvent(self.window.original_name, QFocusEvent(QEvent.Type.FocusOut, reason))
+            self.window.fill_find_button.click()
+            self.assertEqual(self.window.find.text(), "照")
+            self.assertEqual(self.window.original_name.selectedText(), "照")
+
+    def test_filename_field_strips_only_last_extension_and_clears_selection(self):
+        paths = [self.root / name for name in ("archive.tar.gz", "README", ".gitignore", "archive.tar.txt")]
+        for path in paths:
+            path.write_text("sample")
+        self.window.add_paths(paths)
+        for index, expected in enumerate(("archive.tar", "README", ".gitignore", "archive.tar")):
+            self.window.table.setCurrentCell(index, 0)
+            self.assertEqual(self.window.original_name.text(), expected)
+            self.assertFalse(self.window.original_name.hasSelectedText())
+            self.window.original_name.selectAll()
+        self.window.table.setCurrentCell(0, 0)
+        self.assertFalse(self.window.original_name.hasSelectedText())
+
+    def test_numbering_rapid_toggle_and_reset_collapse(self):
+        self.window.show()
+        for checked in (True, False, True):
+            self.window.numbering.setChecked(checked)
+            QTest.qWait(30)
+        self.window.reset_rules()
+        QTest.qWait(260)
+        self.assertEqual(self.window.number_settings.maximumHeight(), 0)
+        self.assertFalse(self.window.number_settings.isEnabled())
+        self.assertEqual(self.window.numbering.progress, 0)
+
+    def test_confirmation_buttons_and_safe_keyboard_defaults(self):
+        for action in ("confirm", "cancel", "escape", "enter", "close"):
+            observed = {}
+            def respond():
+                box = self.app.activeModalWidget()
+                observed["labels"] = [box.button(b).text() for b in
+                                      (QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.Cancel)]
+                observed["default"] = box.defaultButton() == box.button(QMessageBox.StandardButton.Cancel)
+                if action == "confirm":
+                    box.button(QMessageBox.StandardButton.Yes).click()
+                elif action == "cancel":
+                    box.button(QMessageBox.StandardButton.Cancel).click()
+                elif action == "close":
+                    box.close()
+                else:
+                    QTest.keyClick(box, Qt.Key.Key_Escape if action == "escape" else Qt.Key.Key_Return)
+            QTimer.singleShot(0, respond)
+            result = self.window.confirm_action("确认批量改名", "将改名 1 个文件", "不会覆盖已有文件", "确认改名")
+            self.assertEqual(observed["labels"], ["确认改名", "取消"])
+            self.assertTrue(observed["default"])
+            self.assertEqual(result, action == "confirm")
+
     def test_cancel_does_not_rename(self):
         self.window.add_paths([self.source])
         self.window.prefix.setText("x")
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+        with patch.object(MainWindow, "confirm_action", return_value=False):
             self.window.execute_button.click()
         self.assertFalse(self.window.busy)
         self.assertTrue(self.source.exists())
@@ -80,7 +206,7 @@ class AppTests(unittest.TestCase):
     def test_confirm_execute_then_undo_updates_disk_and_table(self):
         self.window.add_paths([self.source])
         self.window.prefix.setText("旅行_")
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+        with patch.object(MainWindow, "confirm_action", return_value=True):
             self.window.execute_button.click()
             self.assertTrue(self.window.busy)
             self.assertFalse(self.window.content.isEnabled())
@@ -99,7 +225,7 @@ class AppTests(unittest.TestCase):
         self.window.add_paths([self.source])
         self.window.prefix.setText("x")
         self.source.write_bytes(b"changed")
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), patch.object(QMessageBox, "exec"):
+        with patch.object(MainWindow, "confirm_action", return_value=True), patch.object(QMessageBox, "exec"):
             self.window.execute_button.click()
             self.wait_worker()
         self.assertTrue(self.source.exists())
@@ -117,7 +243,7 @@ class AppTests(unittest.TestCase):
                 self.source.write_bytes(b"intruder")
                 raise PermissionError("模拟占用")
             real_rename(source, target, snapshot)
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), patch.object(QMessageBox, "exec"):
+        with patch.object(MainWindow, "confirm_action", return_value=True), patch.object(QMessageBox, "exec"):
             with patch("renamer.operations.rename_locked", side_effect=fail_second):
                 self.window.execute_button.click()
                 self.wait_worker()
