@@ -1,12 +1,27 @@
 import os
 import sys
+from pathlib import Path
+
+from PySide6.QtGui import QFont, QFontDatabase
 
 
 def configure_platform():
     if sys.platform == "win32":
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("BatchFileRenamer.Desktop")
-        os.environ.setdefault("QT_QPA_PLATFORM", "windows:fontengine=directwrite")
+        os.environ.setdefault("QT_QPA_PLATFORM", "windows:fontengine=freetype")
+
+
+def configure_fonts(app):
+    if sys.platform == "win32":
+        fonts = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+        for name in ("msyh.ttc", "msyhbd.ttc"):
+            path = fonts / name
+            if path.is_file():
+                QFontDatabase.addApplicationFont(str(path))
+    font = QFont("Microsoft YaHei", 10)
+    font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    app.setFont(font)
 
 
 def set_light_titlebar(widget):

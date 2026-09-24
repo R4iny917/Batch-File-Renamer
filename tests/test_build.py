@@ -6,6 +6,26 @@ from unittest.mock import patch
 import build
 
 
+class NativeUiGateTests(unittest.TestCase):
+    def test_checks_each_supported_scale(self):
+        with patch.object(build.subprocess, "run") as run:
+            build.validate_native_ui()
+        self.assertEqual(run.call_count, 4)
+        self.assertEqual([call.kwargs["env"]["QT_SCREEN_SCALE_FACTORS"] for call in run.call_args_list],
+                         ["1", "1.25", "1.5", "2"])
+        self.assertTrue(all(call.kwargs["check"] for call in run.call_args_list))
+
+    def test_failed_native_check_stops_before_packaging(self):
+        failure = build.subprocess.CalledProcessError(1, "native-ui")
+        with patch.object(build.sys, "platform", "win32"), \
+                patch.object(build.sysconfig, "get_platform", return_value="win-amd64"), \
+                patch.object(build.subprocess, "run", side_effect=failure), \
+                patch.object(build, "make_icon") as make_icon:
+            with self.assertRaises(build.subprocess.CalledProcessError):
+                build.main()
+        make_icon.assert_not_called()
+
+
 class PackageRotationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

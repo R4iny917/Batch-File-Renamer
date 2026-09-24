@@ -7,17 +7,17 @@ from pathlib import Path
 NATIVE_RUN = __name__ == "__main__" and "--run" in sys.argv
 if NATIVE_RUN:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    os.environ["QT_QPA_PLATFORM"] = "windows:fontengine=directwrite"
+    os.environ.pop("QT_QPA_PLATFORM", None)
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QFontInfo, QPalette
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox, QTextEdit
+from PySide6.QtWidgets import QApplication, QMessageBox, QTextEdit, QPushButton, QStyle, QStyleOptionButton
 
 from renamer.ui.dialogs import AppMessageBox
 from renamer.ui.controls import HeadingLabel
 from renamer.ui.main_window import MainWindow
-from renamer.ui.runtime import configure_platform, set_light_titlebar
+from renamer.ui.runtime import configure_fonts, configure_platform, set_light_titlebar
 
 
 @unittest.skipUnless(NATIVE_RUN and sys.platform == "win32", "使用独立进程执行 test_native_ui.py --run")
@@ -27,7 +27,7 @@ class NativeUiTests(unittest.TestCase):
         configure_platform()
         cls.app = QApplication([])
         cls.app.setStyle("Fusion")
-        cls.app.setFont(QFont("Microsoft YaHei UI", 10))
+        configure_fonts(cls.app)
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -66,6 +66,23 @@ class NativeUiTests(unittest.TestCase):
         for point in (rules.numbering.rect().topLeft(), rules.numbering.rect().bottomRight()):
             self.assertTrue(viewport.rect().contains(rules.numbering.mapTo(viewport, point)))
         self.assertFalse(rules.rules_scroll.edges.isVisible())
+
+    def test_rendering_backend_preserves_smooth_text(self):
+        self.assertEqual(os.environ["QT_QPA_PLATFORM"], "windows:fontengine=freetype")
+
+    def test_button_contents_fit_font_and_icon(self):
+        for size in ((1100, 700), (810, 488)):
+            self.window.resize(*size)
+            self.app.processEvents()
+            for button in self.window.findChildren(QPushButton):
+                if not button.isVisible() or not button.text():
+                    continue
+                option = QStyleOptionButton()
+                button.initStyleOption(option)
+                contents = button.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, option, button)
+                required = max(button.fontMetrics().height(), button.iconSize().height() if not button.icon().isNull() else 0)
+                with self.subTest(size=size, button=button.text()):
+                    self.assertGreaterEqual(contents.height(), required)
 
     def test_small_window_keeps_controls_visible_after_toggle_and_scroll(self):
         self.window.resize(810, 488)

@@ -1,18 +1,17 @@
 import sys
 
 from PySide6.QtCore import QLibraryInfo, QTranslator
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
 from .ui.main_window import MainWindow
-from .ui.runtime import configure_platform, set_light_titlebar
+from .ui.runtime import configure_fonts, configure_platform, set_light_titlebar
 
 
 def main():
     configure_platform()
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setFont(QFont("Microsoft YaHei UI", 10))
+    configure_fonts(app)
     translator = QTranslator(app)
     if translator.load("qtbase_zh_CN", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
         app.installTranslator(translator)

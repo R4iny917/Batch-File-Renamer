@@ -12,6 +12,18 @@ ROOT = Path(__file__).resolve().parent
 NAME = "Batch File Renamer"
 
 
+def validate_native_ui():
+    for scale in ("1", "1.25", "1.5", "2"):
+        environment = os.environ.copy()
+        environment["QT_SCREEN_SCALE_FACTORS"] = scale
+        environment["QT_SCALE_FACTOR"] = "1"
+        print(f"Checking native UI at {float(scale):.0%} scale", flush=True)
+        subprocess.run(
+            [sys.executable, str(ROOT / "tests/test_native_ui.py"), "--run"],
+            cwd=ROOT, check=True, env=environment,
+        )
+
+
 def make_icon():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QBuffer, QIODevice
@@ -72,6 +84,7 @@ def publish_package(candidate, archive, dist):
 def main():
     if sys.platform != "win32" or sysconfig.get_platform() != "win-amd64":
         raise SystemExit("Build this package with x64 Python on Windows x64.")
+    validate_native_ui()
     make_icon()
     build_env = os.environ.copy()
     windows = Path(os.environ["SystemRoot"])

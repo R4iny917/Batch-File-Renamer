@@ -48,7 +48,7 @@ renamer/
 
 ## 必须保留的实现约束
 
-- Windows 的 `windows:fontengine=directwrite` 在 QApplication 创建之前配置，保留现有环境覆盖能力。
+- Windows 的 `windows:fontengine=freetype` 在 QApplication 创建之前配置，保留现有环境覆盖能力。创建窗口前显式加载系统微软雅黑常规与粗体，由 `configure_fonts()` 统一设置应用字体。
 - FilenameEdit 在原生失焦事件后恢复文字选区；普通 offscreen 测试不能代替原生验证。
 - 确认框使用具体操作文字，默认按钮和 Escape 均为取消；错误详情使用统一浅色样式。
 - 编号起点允许 0、位数 1–8；最后一个扩展名及其大小写不变。

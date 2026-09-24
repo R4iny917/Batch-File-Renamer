@@ -7,7 +7,7 @@ from PySide6.QtSvg import QSvgRenderer
 APP_ICON = Path(__file__).resolve().parents[1] / "assets" / "app.svg"
 
 STYLE = """
-QWidget { font-family: 'Microsoft YaHei UI'; font-size: 14px; color: #17243B; }
+QWidget { font-family: 'Microsoft YaHei'; font-size: 14px; color: #17243B; }
 QMainWindow, QWidget#content { background: #F7F9FC; }
 QLabel { background: transparent; }
 QLabel#title { font-size: 21px; font-weight: 700; }
@@ -42,6 +42,7 @@ QPushButton#primary:disabled { background: #A4BAEB; border-color: #A4BAEB; color
 QPushButton#quiet { background: transparent; border: 1px solid transparent; color: #647792; padding: 7px 9px; }
 QPushButton#quiet:hover { background: #F0F5FF; color: #2864F5; }
 QPushButton#quiet:disabled { color: #B4BFCC; }
+QPushButton#quiet[compact="true"] { font-size: 13px; padding: 3px 6px; }
 QPushButton#recovery { color: #B63B49; }
 QWidget#stepper { background: #F5F7FB; border: 1px solid #E1E7F0; border-radius: 7px; }
 QWidget#stepper QSpinBox { border: none; background: white; border-radius: 0; padding: 0 2px; }

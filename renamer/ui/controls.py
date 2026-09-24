@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 class HeadingLabel(QLabel):
     def __init__(self, text, **kwargs):
         super().__init__(text, **kwargs)
-        self.setFont(QFontDatabase.font("Microsoft YaHei UI", "Bold", 10))
+        self.setFont(QFontDatabase.font("Microsoft YaHei", "Bold", 10))
 
 
 class FilenameEdit(QLineEdit):
