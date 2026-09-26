@@ -13,6 +13,10 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 from renamer.ui.main_window import MainWindow
 from renamer import operations
+from renamer.core import Rules, build_preview
+from renamer.operations import Move, RenameSession
+from renamer.recovery_store import RecoveryStore
+from renamer.workspace import Workspace
 
 
 class AppTests(unittest.TestCase):
@@ -195,6 +199,25 @@ class AppTests(unittest.TestCase):
             self.assertTrue(observed["default"])
             self.assertEqual(result, action == "confirm")
 
+    def test_later_action_is_named_and_remains_the_safe_default(self):
+        observed = {}
+
+        def respond():
+            box = self.app.activeModalWidget()
+            observed["cancel"] = box.button(QMessageBox.StandardButton.Cancel).text()
+            observed["default"] = box.defaultButton() == box.button(QMessageBox.StandardButton.Cancel)
+            box.button(QMessageBox.StandardButton.Cancel).click()
+
+        QTimer.singleShot(0, respond)
+        result = self.window.confirm_action(
+            "检测到上次未完成的改名", "可继续恢复", "再次检查文件身份", "恢复到改名前状态",
+            cancel_text="稍后处理",
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(observed["cancel"], "稍后处理")
+        self.assertTrue(observed["default"])
+
     def test_cancel_does_not_rename(self):
         self.window.add_paths([self.source])
         self.window.rules_panel.prefix.setText("x")
@@ -283,6 +306,124 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.window.rules_panel.prefix.text(), "旅行_")
         self.assertFalse(self.window.workspace.last_result.ok)
         self.assertIn("模拟后台异常", self.window.workspace.last_result.errors[0])
+
+    def test_persisted_history_is_available_without_startup_prompt(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+        with patch("renamer.operations.rename_locked", side_effect=lambda source, target, snapshot:
+                   os.rename(source, target)):
+            self.assertTrue(session.execute(build_preview([self.source], Rules(prefix="x"))).ok)
+        window = MainWindow(Workspace(RenameSession(store)))
+        self.addCleanup(window.close)
+
+        self.assertTrue(window.undo_button.isEnabled())
+        self.assertIn("重新打开", window.history_hint.text())
+        with patch.object(window, "confirm_action") as confirm:
+            window.prompt_startup_recovery()
+        confirm.assert_not_called()
+
+    def test_interrupted_undo_can_be_deferred_and_resumed_from_button(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        snapshot = operations.Snapshot.capture(self.source)
+        renamed = self.root / "renamed.jpg"
+        os.rename(self.source, renamed)
+        original_move = Move(self.source, renamed, snapshot)
+        undo_move = original_move.reverse()
+        store.save({
+            "schema_version": 1,
+            "history": [RenameSession._move_to_state(original_move)],
+            "active": {
+                "action": "undo",
+                "moves": [RenameSession._move_to_state(undo_move)],
+                "completed": 0,
+                "in_flight": 0,
+            },
+        })
+        window = MainWindow(Workspace(RenameSession(store)))
+        self.addCleanup(window.close)
+
+        self.assertFalse(window.execute_button.isEnabled())
+        self.assertFalse(window.undo_button.isEnabled())
+        self.assertFalse(window.recover_button.isHidden())
+        self.assertEqual(window.recover_button.text(), "继续撤销")
+        with patch.object(window, "confirm_action", return_value=False) as confirm:
+            window.prompt_startup_recovery()
+        self.assertEqual(confirm.call_args.args[-1], "继续撤销")
+        self.assertEqual(confirm.call_args.kwargs["cancel_text"], "稍后处理")
+        self.assertTrue(renamed.exists())
+        self.assertFalse(self.source.exists())
+
+        with patch.object(window, "confirm_action", return_value=True), \
+                patch.object(window, "start_operation") as start_operation:
+            window.request_recovery()
+        self.assertEqual(start_operation.call_args.args[1], "undo")
+        self.assertTrue(renamed.exists())
+        session = window.workspace.session
+        session.active = None
+        session.pending = []
+
+    def test_interrupted_rename_prompt_requires_confirmation_before_recovery(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        snapshot = operations.Snapshot.capture(self.source)
+        renamed = self.root / "renamed.jpg"
+        os.rename(self.source, renamed)
+        move = Move(self.source, renamed, snapshot)
+        store.save({
+            "schema_version": 1,
+            "history": [],
+            "active": {
+                "action": "recover",
+                "moves": [RenameSession._move_to_state(move.reverse())],
+                "completed": 0,
+                "in_flight": None,
+            },
+        })
+        window = MainWindow(Workspace(RenameSession(store)))
+        self.addCleanup(window.close)
+
+        with patch.object(window, "confirm_action", return_value=False) as confirm, \
+                patch.object(window, "start_operation") as start_operation:
+            window.prompt_startup_recovery()
+
+        self.assertEqual(confirm.call_args.args[0], "检测到上次未完成的改名")
+        self.assertEqual(confirm.call_args.args[3], "恢复到改名前状态")
+        self.assertEqual(confirm.call_args.kwargs["cancel_text"], "稍后处理")
+        start_operation.assert_not_called()
+        self.assertTrue(renamed.exists())
+        self.assertFalse(self.source.exists())
+        window.workspace.session.active = None
+        window.workspace.session.pending = []
+
+    def test_unverifiable_recovery_disables_file_operations_and_shows_details(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        snapshot = operations.Snapshot.capture(self.source)
+        renamed = self.root / "renamed.jpg"
+        os.rename(self.source, renamed)
+        move = Move(self.source, renamed, snapshot)
+        store.save({
+            "schema_version": 1,
+            "history": [],
+            "active": {
+                "action": "execute",
+                "moves": [RenameSession._move_to_state(move)],
+                "completed": 0,
+                "in_flight": 0,
+            },
+        })
+        with patch("renamer.operations.Snapshot.capture", side_effect=OSError("unreadable")):
+            session = RenameSession(store)
+        window = MainWindow(Workspace(session))
+        self.addCleanup(window.close)
+
+        self.assertTrue(session.recovery_error)
+        self.assertFalse(window.execute_button.isEnabled())
+        self.assertFalse(window.undo_button.isEnabled())
+        self.assertTrue(window.recover_button.isHidden())
+        self.assertFalse(window.details_button.isHidden())
+        with patch("renamer.ui.main_window.show_recovery_error") as show_error:
+            window.prompt_startup_recovery()
+        show_error.assert_called_once()
+        self.assertTrue(renamed.exists())
 
     def test_partial_failure_and_recovery_update_table(self):
         second = self.root / "second.txt"

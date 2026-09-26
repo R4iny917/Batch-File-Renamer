@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from renamer.core import Rules, build_preview
 from renamer.operations import RenameSession
+from renamer.recovery_store import RecoveryStore, RecoveryStoreError
 import renamer.operations as operations
 
 
@@ -31,6 +32,300 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(self.a.read_bytes(), b"first")
         self.assertEqual(self.b.read_bytes(), b"second")
         self.assertFalse(self.session.history)
+
+    def test_successful_history_survives_session_restart_and_can_be_undone(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+        def rename(source, target, snapshot):
+            os.rename(source, target)
+
+        with patch("renamer.operations.rename_locked", side_effect=rename):
+            self.assertTrue(session.execute(self.rows).ok)
+            restarted = RenameSession(store)
+            self.assertEqual(restarted.history, session.history)
+            result = restarted.undo()
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertTrue(self.a.exists())
+        self.assertTrue(self.b.exists())
+        self.assertIsNone(store.load())
+
+    def test_interrupted_execute_after_move_can_be_recovered_after_restart(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+
+        def rename_then_crash(source, target, snapshot):
+            os.rename(source, target)
+            raise SystemExit("simulated process interruption")
+
+        with patch("renamer.operations.rename_locked", side_effect=rename_then_crash):
+            with self.assertRaises(SystemExit):
+                session.execute(self.rows)
+
+        restarted = RenameSession(store)
+        self.assertTrue(restarted.pending)
+        def rename(source, target, snapshot):
+            os.rename(source, target)
+        with patch("renamer.operations.rename_locked", side_effect=rename):
+            result = restarted.recover()
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertTrue(self.a.exists())
+        self.assertFalse((self.root / "xa.txt").exists())
+        self.assertIsNone(store.load())
+
+    def test_interrupted_execute_before_move_clears_empty_transaction(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+
+        def crash_before_move(source, target, snapshot):
+            raise SystemExit("simulated process interruption")
+
+        with patch("renamer.operations.rename_locked", side_effect=crash_before_move):
+            with self.assertRaises(SystemExit):
+                session.execute(self.rows)
+
+        restarted = RenameSession(store)
+
+        self.assertFalse(restarted.pending)
+        self.assertFalse(restarted.active)
+        self.assertTrue(self.a.exists())
+        self.assertIsNone(store.load())
+
+    def test_interrupted_move_with_changed_target_is_not_recovered(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+        target = self.root / "xa.txt"
+
+        def rename_then_crash(source, destination, snapshot):
+            os.rename(source, destination)
+            raise SystemExit("simulated process interruption")
+
+        with patch("renamer.operations.rename_locked", side_effect=rename_then_crash):
+            with self.assertRaises(SystemExit):
+                session.execute(self.rows[:1])
+        target.write_bytes(b"external replacement")
+
+        restarted = RenameSession(store)
+        result = restarted.recover()
+
+        self.assertFalse(result.ok)
+        self.assertTrue(target.exists())
+        self.assertEqual(target.read_bytes(), b"external replacement")
+
+    def test_startup_blocks_recovery_when_reverse_target_is_occupied(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        snapshot = operations.Snapshot.capture(self.a)
+        renamed = self.root / "renamed.txt"
+        os.rename(self.a, renamed)
+        self.a.write_bytes(b"external replacement")
+        move = operations.Move(self.a, renamed, snapshot).reverse()
+        store.save({
+            "schema_version": 1,
+            "history": [],
+            "active": {
+                "action": "recover",
+                "moves": [RenameSession._move_to_state(move)],
+                "completed": 0,
+                "in_flight": None,
+            },
+        })
+
+        restarted = RenameSession(store)
+
+        self.assertTrue(restarted.recovery_error)
+        self.assertFalse(restarted.execute(self.rows[:1]).ok)
+        self.assertEqual(renamed.read_bytes(), b"first")
+        self.assertEqual(self.a.read_bytes(), b"external replacement")
+        self.assertIsNotNone(store.load())
+
+    def test_interrupted_undo_resumes_after_restart(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+
+        def rename(source, target, snapshot):
+            os.rename(source, target)
+
+        with patch("renamer.operations.rename_locked", side_effect=rename):
+            self.assertTrue(session.execute(self.rows).ok)
+
+        def undo_then_crash(source, target, snapshot):
+            os.rename(source, target)
+            raise SystemExit("simulated process interruption")
+
+        with patch("renamer.operations.rename_locked", side_effect=undo_then_crash):
+            with self.assertRaises(SystemExit):
+                session.undo()
+
+        restarted = RenameSession(store)
+        self.assertTrue(restarted.active)
+        self.assertEqual(restarted.active["action"], "undo")
+        self.assertEqual(restarted.recovery_action, "undo")
+        with patch("renamer.operations.rename_locked", side_effect=rename):
+            result = restarted.undo()
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertTrue(self.a.exists())
+        self.assertTrue(self.b.exists())
+        self.assertIsNone(store.load())
+
+    def test_recovery_finishes_when_move_completes_before_error_is_reported(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        snapshot = operations.Snapshot.capture(self.a)
+        target = self.root / "renamed.txt"
+        os.rename(self.a, target)
+        move = operations.Move(target, self.a, snapshot)
+        store.save({
+            "schema_version": 1,
+            "history": [],
+            "active": {
+                "action": "recover",
+                "moves": [RenameSession._move_to_state(move)],
+                "completed": 0,
+                "in_flight": None,
+            },
+        })
+        session = RenameSession(store)
+
+        def rename_then_report_error(source, destination, expected):
+            os.rename(source, destination)
+            raise PermissionError("simulated late filesystem error")
+
+        with patch("renamer.operations.rename_locked", side_effect=rename_then_report_error):
+            result = session.recover()
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertTrue(self.a.exists())
+        self.assertFalse(target.exists())
+        self.assertFalse(session.has_recovery)
+        self.assertIsNone(store.load())
+
+    def test_interrupted_recovery_after_move_is_cleared_on_restart(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        snapshot = operations.Snapshot.capture(self.a)
+        renamed = self.root / "renamed.txt"
+        os.rename(self.a, renamed)
+        recovery_move = operations.Move(renamed, self.a, snapshot)
+        store.save({
+            "schema_version": 1,
+            "history": [],
+            "active": {
+                "action": "recover",
+                "moves": [RenameSession._move_to_state(recovery_move)],
+                "completed": 0,
+                "in_flight": None,
+            },
+        })
+        session = RenameSession(store)
+
+        def rename_then_crash(source, target, expected):
+            os.rename(source, target)
+            raise SystemExit("simulated process interruption")
+
+        with patch("renamer.operations.rename_locked", side_effect=rename_then_crash):
+            with self.assertRaises(SystemExit):
+                session.recover()
+
+        restarted = RenameSession(store)
+
+        self.assertTrue(self.a.exists())
+        self.assertFalse(renamed.exists())
+        self.assertFalse(restarted.has_recovery)
+        self.assertIsNone(store.load())
+
+    def test_interrupted_after_last_rename_keeps_completed_batch_undoable(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+
+        def rename_then_crash(source, target, snapshot):
+            os.rename(source, target)
+            raise SystemExit("simulated process interruption")
+
+        with patch("renamer.operations.rename_locked", side_effect=rename_then_crash):
+            with self.assertRaises(SystemExit):
+                session.execute(self.rows[:1])
+
+        restarted = RenameSession(store)
+        self.assertEqual(len(restarted.history), 1)
+        def rename(source, target, snapshot):
+            os.rename(source, target)
+        with patch("renamer.operations.rename_locked", side_effect=rename):
+            result = restarted.undo()
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertTrue(self.a.exists())
+
+    def test_persisted_history_rejects_changed_file_after_restart(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+        def rename(source, target, snapshot):
+            os.rename(source, target)
+
+        with patch("renamer.operations.rename_locked", side_effect=rename):
+            self.assertTrue(session.execute(self.rows[:1]).ok)
+        target = self.root / "xa.txt"
+        target.write_bytes(b"external replacement")
+
+        restarted = RenameSession(store)
+        result = restarted.undo()
+
+        self.assertFalse(result.ok)
+        self.assertEqual(target.read_bytes(), b"external replacement")
+        self.assertFalse(self.a.exists())
+
+    def test_recovery_record_write_failure_prevents_first_move(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+
+        with patch.object(store, "save", side_effect=RecoveryStoreError("disk unavailable")):
+            with self.assertRaises(RecoveryStoreError):
+                session.execute(self.rows[:1])
+
+        self.assertTrue(self.a.exists())
+        self.assertFalse((self.root / "xa.txt").exists())
+        self.assertTrue(session.recovery_error)
+        self.assertFalse(session.execute(self.rows[:1]).ok)
+
+    def test_checkpoint_write_failure_after_move_blocks_more_operations(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+        real_save = store.save
+        calls = 0
+
+        def fail_progress_write(state):
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                real_save(state)
+            else:
+                raise RecoveryStoreError("disk unavailable")
+
+        def rename(source, target, snapshot):
+            os.rename(source, target)
+
+        with patch.object(store, "save", side_effect=fail_progress_write):
+            with patch("renamer.operations.rename_locked", side_effect=rename):
+                with self.assertRaises(RecoveryStoreError):
+                    session.execute(self.rows[:1])
+
+        target = self.root / "xa.txt"
+        self.assertTrue(target.exists())
+        self.assertTrue(session.recovery_error)
+        self.assertFalse(session.execute(self.rows[:1]).ok)
+
+        restarted = RenameSession(store)
+        self.assertEqual(len(restarted.history), 1)
+        self.assertEqual(target.read_bytes(), b"first")
+
+    def test_invalid_move_record_is_preserved_and_rejected(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        invalid_state = {"schema_version": 1, "history": [{"source": "invalid"}], "active": None}
+        store.save(invalid_state)
+
+        with self.assertRaises(RecoveryStoreError):
+            RenameSession(store)
+
+        self.assertEqual(store.load(), invalid_state)
 
     def test_stale_preview_does_not_rename_any_file(self):
         self.b.write_bytes(b"modified elsewhere")
@@ -94,6 +389,44 @@ class OperationTests(unittest.TestCase):
         self.assertTrue(self.session.recover().ok)
         self.assertEqual(self.a.read_bytes(), b"first")
         self.assertFalse(self.session.pending)
+
+    def test_incomplete_rollback_survives_restart_and_preserves_previous_history(self):
+        store = RecoveryStore(self.root / "recovery.json")
+        session = RenameSession(store)
+
+        def rename(source, target, snapshot):
+            os.rename(source, target)
+
+        with patch("renamer.operations.rename_locked", side_effect=rename):
+            self.assertTrue(session.execute(self.rows).ok)
+        previous_history = list(session.history)
+        xa, xb = self.root / "xa.txt", self.root / "xb.txt"
+        next_rows = build_preview([xa, xb], Rules(prefix="y"))
+
+        def fail_second_and_occupy_rollback_target(source, target, snapshot):
+            if source == xb:
+                xa.write_bytes(b"external replacement")
+                raise PermissionError("simulated second move failure")
+            os.rename(source, target)
+
+        with patch("renamer.operations.rename_locked", side_effect=fail_second_and_occupy_rollback_target):
+            failed = session.execute(next_rows)
+
+        self.assertFalse(failed.ok)
+        self.assertTrue(session.pending)
+        restarted = RenameSession(store)
+        self.assertEqual(restarted.recovery_action, "recover")
+        self.assertEqual(restarted.history, previous_history)
+
+        xa.unlink()
+        restarted = RenameSession(store)
+        self.assertFalse(restarted.recovery_error)
+        with patch("renamer.operations.rename_locked", side_effect=rename):
+            self.assertTrue(restarted.recover().ok)
+            self.assertTrue(restarted.undo().ok)
+
+        self.assertEqual(self.a.read_bytes(), b"first")
+        self.assertEqual(self.b.read_bytes(), b"second")
 
     def test_undo_preflight_is_all_or_nothing(self):
         self.assertTrue(self.session.execute(self.rows).ok)

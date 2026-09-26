@@ -125,6 +125,22 @@ class NativeUiTests(unittest.TestCase):
         self.assertEqual(box.palette().color(QPalette.ColorRole.Window).name(), "#ffffff")
         self.assertEqual(box.palette().color(QPalette.ColorRole.WindowText).name(), "#17243b")
 
+    def test_startup_recovery_uses_later_as_safe_default(self):
+        observed = {}
+
+        def inspect_confirmation():
+            box = self.app.activeModalWidget()
+            observed["later"] = box.button(QMessageBox.StandardButton.Cancel).text()
+            observed["default"] = box.defaultButton() == box.button(QMessageBox.StandardButton.Cancel)
+            QTest.keyClick(box, Qt.Key.Key_Escape)
+
+        QTimer.singleShot(50, inspect_confirmation)
+        self.assertFalse(self.window.confirm_action(
+            "检测到上次未完成的改名", "已核对文件身份", "将再次检查目标名称",
+            "恢复到改名前状态", cancel_text="稍后处理",
+        ))
+        self.assertEqual(observed, {"later": "稍后处理", "default": True})
+
 
 if __name__ == "__main__":
     unittest.main(argv=[sys.argv[0]], verbosity=2)

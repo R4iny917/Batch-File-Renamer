@@ -47,7 +47,7 @@ class AppMessageBox(QMessageBox):
         set_light_titlebar(self)
 
 
-def confirm_action(parent, title, message, details, action):
+def confirm_action(parent, title, message, details, action, cancel_text="取消"):
     box = AppMessageBox(parent)
     box.setWindowTitle(title)
     box.setText(message)
@@ -56,10 +56,22 @@ def confirm_action(parent, title, message, details, action):
     confirm = box.button(QMessageBox.StandardButton.Yes)
     confirm.setText(action)
     confirm.setObjectName("primary")
-    box.button(QMessageBox.StandardButton.Cancel).setText("取消")
+    box.button(QMessageBox.StandardButton.Cancel).setText(cancel_text)
     box.setDefaultButton(QMessageBox.StandardButton.Cancel)
     box.setEscapeButton(QMessageBox.StandardButton.Cancel)
     return box.exec() == QMessageBox.StandardButton.Yes
+
+
+def show_recovery_error(parent, details):
+    box = AppMessageBox(parent)
+    box.setWindowTitle("暂时无法安全恢复")
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setText("恢复记录或文件状态无法核实。")
+    box.setInformativeText("应用不会自动改动这些文件。改名和撤销已暂停；排除冲突后重新打开应用可再次核验。")
+    box.setDetailedText(details)
+    box.setStandardButtons(QMessageBox.StandardButton.Ok)
+    box.button(QMessageBox.StandardButton.Ok).setText("知道了")
+    box.exec()
 
 
 def show_details(parent, result):

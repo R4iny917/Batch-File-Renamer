@@ -6,11 +6,11 @@ from .operations import RenameSession, Result
 
 
 class Workspace:
-    def __init__(self):
+    def __init__(self, session: RenameSession | None = None):
         self.paths: list[Path] = []
         self.rules = Rules()
         self.rows: list[Entry] = []
-        self.session = RenameSession()
+        self.session = session if session is not None else RenameSession()
         self.last_result: Result | None = None
 
     def add_paths(self, paths: Iterable[str | Path]) -> None:

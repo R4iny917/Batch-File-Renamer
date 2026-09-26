@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from ..core import Rules
 from ..operations import Result
 from ..workspace import Workspace
-from .dialogs import confirm_action, show_details
+from .dialogs import confirm_action, show_details, show_recovery_error
 from .controls import HeadingLabel
 from .rules_panel import RulesPanel
 from .preview_panel import PreviewPanel
@@ -20,13 +20,13 @@ from .theme import STYLE, APP_ICON
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, workspace: Workspace | None = None):
         super().__init__()
         self.setWindowTitle("Batch File Renamer")
         self.setWindowIcon(QIcon(str(APP_ICON)))
         self.setMinimumSize(760, 420)
         self.setStyleSheet(STYLE)
-        self.workspace = Workspace()
+        self.workspace = workspace if workspace is not None else Workspace()
         self.busy = False
         self.worker: Worker | None = None
         self._build_content()
@@ -71,7 +71,8 @@ class MainWindow(QMainWindow):
         self.status.setWordWrap(True)
         self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         status_group.addWidget(self.status)
-        status_group.addWidget(QLabel("撤销仅在本次打开期间有效", objectName="hint"))
+        self.history_hint = QLabel("", objectName="hint")
+        status_group.addWidget(self.history_hint)
         footer.addLayout(status_group, 1)
         self.details_button = QPushButton("错误详情", objectName="quiet")
         self.details_button.clicked.connect(self.show_details)
@@ -147,26 +148,73 @@ class MainWindow(QMainWindow):
             self.status.setText(f"{changed} 个文件可改名 · 无冲突")
         else:
             self.status.setText("当前规则没有改变文件名。可以设置替换、前后缀或追加编号。")
+        if self.workspace.session.recovery_error:
+            self.status.setText("恢复状态无法核实，改名和撤销已暂停。")
+            self.status.setStyleSheet("color: #B63B49; font-weight: 600;")
+        elif self.workspace.session.recovery_action:
+            self.status.setText("检测到未完成操作，可继续处理或稍后处理。")
+            self.status.setStyleSheet("color: #A56300; font-weight: 600;")
         self.update_buttons()
 
     def update_buttons(self):
-        pending = bool(self.workspace.session.pending)
-        self.execute_button.setEnabled(not self.busy and not pending and any(r.changed for r in self.workspace.rows)
+        session = self.workspace.session
+        blocked = session.has_recovery
+        self.execute_button.setEnabled(not self.busy and not blocked and any(r.changed for r in self.workspace.rows)
                                        and not any(r.error for r in self.workspace.rows))
-        self.undo_button.setEnabled(not self.busy and not pending and bool(self.workspace.session.history))
-        self.recover_button.setVisible(pending)
-        self.recover_button.setEnabled(not self.busy)
-        self.details_button.setVisible(bool(self.workspace.last_result and self.workspace.last_result.errors))
+        self.undo_button.setEnabled(not self.busy and not blocked and bool(session.history))
+        action = session.recovery_action
+        can_continue = bool(action and not session.recovery_error)
+        self.recover_button.setVisible(can_continue)
+        self.recover_button.setText("继续撤销" if action == "undo" else "继续恢复")
+        self.recover_button.setEnabled(not self.busy and can_continue)
+        has_details = bool((self.workspace.last_result and self.workspace.last_result.errors)
+                           or session.recovery_error)
+        self.details_button.setVisible(has_details)
+        if session.recovery_error:
+            self.history_hint.setText("恢复状态无法核实，改名与撤销已暂停。")
+        elif action:
+            self.history_hint.setText("存在未完成操作；稍后处理后，重新打开仍可继续。")
+        elif session.store is not None:
+            self.history_hint.setText("最近一次改名记录会保留，重新打开后仍可撤销。")
+        else:
+            self.history_hint.setText("撤销记录仅在本次打开期间有效。")
 
-    def confirm_action(self, title, message, details, action):
-        return confirm_action(self, title, message, details, action)
+    def confirm_action(self, title, message, details, action, cancel_text="取消"):
+        return confirm_action(self, title, message, details, action, cancel_text)
+
+    def prompt_startup_recovery(self):
+        session = self.workspace.session
+        if session.recovery_error:
+            self.workspace.last_result = Result(False, "暂时无法安全恢复", [session.recovery_error])
+            self.update_buttons()
+            show_recovery_error(self, session.recovery_error)
+            return
+        action = session.recovery_action
+        if not action:
+            return
+        moves = session.active["moves"] if session.active else session.pending
+        if action == "undo":
+            title = "上次撤销尚未完成"
+            message = "程序上次在撤销过程中退出。继续后会按原来的撤销操作处理尚未完成的文件。"
+            detail = "继续前会再次检查文件身份和目标占用。"
+            confirm_label = "继续撤销"
+            callback = session.undo
+        else:
+            title = "检测到上次未完成的改名"
+            message = "程序检测到上次批量改名尚未完成。确认后会再次核验文件身份和目标占用，并恢复已完成的部分。"
+            detail = (f"待处理 {len(moves)} 个文件\n"
+                      "不会覆盖已存在的文件。")
+            confirm_label = "恢复到改名前状态"
+            callback = session.recover
+        if self.confirm_action(title, message, detail, confirm_label, cancel_text="稍后处理"):
+            self.start_operation(callback, action)
 
     def request_execute(self):
         if not self.execute_button.isEnabled():
             return
         count = sum(row.changed for row in self.workspace.rows)
         if self.confirm_action("确认批量改名", f"将按预览改名 {count} 个文件",
-                               "不会覆盖已有文件。\n成功后可在本次打开期间撤销。", "确认改名"):
+                               "不会覆盖已有文件。\n成功后仍可撤销最近一批。", "确认改名"):
             rows = list(self.workspace.rows)
             session = self.workspace.session
             self.start_operation(lambda: session.execute(rows), "execute")
@@ -177,9 +225,23 @@ class MainWindow(QMainWindow):
             self.start_operation(self.workspace.session.undo, "undo")
 
     def request_recovery(self):
-        if self.confirm_action("确认恢复", f"尝试恢复 {len(self.workspace.session.pending)} 个文件？",
-                               "请先处理错误详情中的文件占用或外部修改。", "开始恢复"):
-            self.start_operation(self.workspace.session.recover, "recover")
+        session = self.workspace.session
+        action = session.recovery_action
+        moves = session.active["moves"] if session.active else session.pending
+        if action == "undo":
+            title = "确认继续撤销"
+            message = f"继续撤销剩余的 {len(moves)} 个文件？"
+            detail = "应用会再次检查文件身份和目标占用。"
+            label = "继续撤销"
+            callback = session.undo
+        else:
+            title = "确认恢复"
+            message = f"尝试恢复 {len(moves)} 个文件？"
+            detail = "请先处理错误详情中的文件占用或外部修改。"
+            label = "开始恢复"
+            callback = session.recover
+        if action and self.confirm_action(title, message, detail, label):
+            self.start_operation(callback, action)
 
     def start_operation(self, operation: Callable[[], Result], action: str) -> None:
         if self.busy:
@@ -213,9 +275,11 @@ class MainWindow(QMainWindow):
         if self.busy:
             event.ignore()
             return
-        if self.workspace.session.pending:
-            if not self.confirm_action("仍有文件未恢复", "仍要关闭程序？",
-                                       "关闭后会丢失本次恢复记录。\n建议先查看错误详情并完成恢复。", "仍然关闭"):
+        session = self.workspace.session
+        if session.has_recovery and not session.recovery_error:
+            if not self.confirm_action("仍有操作待处理", "仍要关闭程序？",
+                                       "待处理记录会保留在本机，下次打开后仍可继续。",
+                                       "仍然关闭", cancel_text="继续处理"):
                 event.ignore()
                 return
         event.accept()
