@@ -7,7 +7,7 @@
 - `renamer/core.py`：命名规则、校验、文件快照和预览。
 - `renamer/operations.py`、`recovery_store.py`、`windows.py`：执行、撤销、恢复日志与 Windows 文件安全。
 - `renamer/workspace.py`：应用状态；业务模块保持独立，不依赖 Qt。
-- `renamer/ui/`：窗口、面板、控件、样式、弹窗及后台任务；仅主线程访问控件。
+- `renamer/ui/`：窗口、面板、控件、样式、弹窗及后台任务；仅主线程访问控件。预览支持窗口文件拖入和手动排序，编号遵循列表顺序。
 - `renamer/assets/`：应用图标；`tests/`：自动化测试。
 - `build.py`、`Batch File Renamer.spec`、`start.cmd`：打包配置与开发启动入口。
 

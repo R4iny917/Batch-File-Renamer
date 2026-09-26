@@ -16,6 +16,8 @@ QLabel#rulesHeading { font-size: 16px; }
 QLabel#groupTitle { font-size: 14px; font-weight: 700; color: #36445A; }
 QLabel#sampleTitle { font-size: 13px; font-weight: 400; color: #626D7D; }
 QLabel#hint, QLabel#subtitle { color: #626D7D; font-size: 13px; }
+QLabel#dropIcon { color: #2864F5; border: 1px solid #CBD8EB; border-radius: 5px; font-size: 12px; min-width: 18px; max-width: 18px; min-height: 18px; max-height: 18px; }
+QLabel#dropOverlay { color: #2859CB; border: 2px dashed #6D91F6; border-radius: 8px; background: rgba(244, 247, 255, 237); font-weight: 600; }
 QLabel#example { color: #2864F5; font-weight: 600; }
 QFrame#sample { background: #F8FAFC; border: none; border-top: 1px solid #EDF0F5; border-radius: 0; }
 QLabel#subtitle { font-size: 14px; }

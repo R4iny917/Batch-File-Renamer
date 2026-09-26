@@ -16,7 +16,7 @@ renamer/
 ├── ui/
 │   ├── main_window.py   组合界面、连接事件、协调任务及关闭
 │   ├── rules_panel.py   规则输入、重置、编号联动、命名示例
-│   ├── preview_panel.py 表格及绘制、当前行、文件名选区、复制
+│   ├── preview_panel.py 表格及绘制、拖放排序、文件名选区、复制
 │   ├── controls.py      步进器、开关、折叠、滚动渐隐、只读选区
 │   ├── dialogs.py       确认、错误详情、弹窗样式和安全默认按钮
 │   ├── theme.py         全局样式、资源路径、线形图标
@@ -32,13 +32,13 @@ renamer/
 - `app → ui.main_window → workspace → core / operations → windows`，底层业务模块不依赖 Qt。
 - `Workspace` 持有文件列表、当前 `Rules`、预览 `Entry`、`RenameSession` 和最近的 `Result`。
 - `RulesPanel` 持有输入控件，以 `rules_changed(Rules)` 提交用户修改；`set_rules()` 静默同步状态，避免重复刷新。
-- `PreviewPanel` 保存不可变预览条目的显示快照，只管理显示与选择；不修改文件、不持有改名会话。
+- `PreviewPanel` 保存不可变预览条目的显示快照，管理显示、选择、预览区文件拖入及行顺序拖放；顺序变化通过事件交给主窗口，不修改文件、不持有改名会话。主窗口接收其余区域的本地文件拖放。
 - 面板通过事件交互：`find_requested(str)` 由主窗口连接到规则面板，`example_changed(str)` 更新左侧示例。面板不访问彼此的控件。
 - 主窗口持有忙碌状态和 Worker，负责禁用界面、确认操作及关闭检查。只有主线程访问控件。
 
 ## 数据流
 
-1. 添加、移除或清空文件，或修改规则。
+1. 添加、拖入、移除、清空或重排文件，或修改规则。
 2. Workspace 计算一次预览，主窗口将结果交给预览面板并更新状态栏。
 3. 用户确认执行后，复制本批次的预览列表并交给后台 Worker。
 4. Worker 只调用 RenameSession，线程结束后主线程读取 Result。

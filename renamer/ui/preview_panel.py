@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QPainter
@@ -11,6 +12,66 @@ from PySide6.QtWidgets import (
 from ..core import Entry
 from .controls import FilenameEdit, HeadingLabel
 from .theme import line_icon
+
+
+class PreviewTable(QTableWidget):
+    files_dropped = Signal(list)
+    order_changed = Signal(list)
+
+    def __init__(self, rows, columns):
+        super().__init__(rows, columns)
+        self.drop_overlay = QLabel("松开鼠标，将文件添加到列表", parent=self.viewport(), objectName="dropOverlay")
+        self.drop_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.drop_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.drop_overlay.hide()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() and event.source() != self:
+            self._show_drop_overlay()
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() and event.source() != self:
+            self._show_drop_overlay()
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self.drop_overlay.hide()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self.drop_overlay.hide()
+        if event.mimeData().hasUrls() and event.source() != self:
+            paths = [url.toLocalFile() for url in event.mimeData().urls()
+                     if url.isLocalFile() and Path(url.toLocalFile()).is_file()]
+            if paths:
+                self.files_dropped.emit(paths)
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
+        before = self._ordered_paths()
+        super().dropEvent(event)
+        reordered = self._ordered_paths()
+        if reordered != before:
+            self.order_changed.emit(reordered)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.drop_overlay.setGeometry(self.viewport().rect().adjusted(8, 8, -8, -8))
+
+    def _show_drop_overlay(self):
+        self.drop_overlay.setGeometry(self.viewport().rect().adjusted(8, 8, -8, -8))
+        self.drop_overlay.show()
+        self.drop_overlay.raise_()
+
+    def _ordered_paths(self):
+        return [self.item(row, 0).data(Qt.ItemDataRole.UserRole + 1)
+                for row in range(self.rowCount()) if self.item(row, 0)]
 
 
 class PreviewPanel(QFrame):
@@ -29,6 +90,7 @@ class PreviewPanel(QFrame):
         preview_layout.addLayout(self._create_toolbar())
         self._create_table()
         preview_layout.addWidget(self.table, 1)
+        self._add_drop_hint(preview_layout)
         self._add_filename_controls(preview_layout)
         self._create_empty_state()
 
@@ -54,12 +116,19 @@ class PreviewPanel(QFrame):
         return toolbar
 
     def _create_table(self):
-        self.table = QTableWidget(0, 4)
+        self.table = PreviewTable(0, 4)
         self.table.setHorizontalHeaderLabels(["原文件名", "新文件名", "所在目录", "状态"])
         self.table.setColumnHidden(2, True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.table.setDragEnabled(True)
+        self.table.setAcceptDrops(True)
+        self.table.viewport().setAcceptDrops(True)
+        self.table.setDropIndicatorShown(True)
+        self.table.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.table.setDragDropOverwriteMode(False)
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
         self.table.setSortingEnabled(False)
@@ -78,6 +147,17 @@ class PreviewPanel(QFrame):
         self.copy_name_action.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self.copy_name_action.triggered.connect(self.copy_original_names)
         self.table.addAction(self.copy_name_action)
+
+    def _add_drop_hint(self, preview_layout):
+        hint = QHBoxLayout()
+        hint.setContentsMargins(18, 0, 12, 0)
+        hint.setSpacing(7)
+        icon = QLabel("↓", objectName="dropIcon")
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.addWidget(icon)
+        hint.addWidget(QLabel("拖入文件即可添加；拖动左侧手柄调整编号顺序", objectName="hint"))
+        hint.addStretch()
+        preview_layout.addLayout(hint)
 
     def _add_filename_controls(self, preview_layout):
         name_row = QHBoxLayout()
@@ -120,6 +200,7 @@ class PreviewPanel(QFrame):
                     item.setForeground(QColor("#B03840"))
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, str(row.source.parent))
+                    item.setData(Qt.ItemDataRole.UserRole + 1, str(row.source))
                 elif column == 1:
                     item.setData(Qt.ItemDataRole.UserRole, row.changed)
                 elif column == 3:
@@ -188,8 +269,12 @@ class PreviewDelegate(QStyledItemDelegate):
         text = str(index.data() or "")
         painter.setFont(option.font)
         if index.column() == 0:
-            self.file_icon.paint(painter, rect.left() + 13, rect.center().y() - 12, 24, 24)
-            text_rect.adjust(32, 0, 0, 0)
+            painter.setPen(QColor("#9AA6B8"))
+            for x_offset in (8, 12):
+                for y_offset in (-5, 0, 5):
+                    painter.drawEllipse(rect.left() + x_offset, rect.center().y() + y_offset, 2, 2)
+            self.file_icon.paint(painter, rect.left() + 23, rect.center().y() - 12, 24, 24)
+            text_rect.adjust(42, 0, 0, 0)
             painter.setPen(QColor("#17243B"))
             painter.drawText(text_rect.adjusted(0, 0, 0, -19), Qt.AlignmentFlag.AlignVCenter,
                              option.fontMetrics.elidedText(text, Qt.TextElideMode.ElideRight, text_rect.width()))
