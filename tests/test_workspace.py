@@ -26,6 +26,23 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.workspace.paths, [self.first])
         self.assertEqual(self.workspace.rows[0].target.name, "first_00.txt")
 
+    def test_reordering_paths_updates_preview_and_numbering(self):
+        self.workspace.add_paths([self.first, self.second])
+        self.workspace.set_rules(Rules(numbering=True, start=1, digits=3))
+
+        self.workspace.reorder_paths([self.second, self.first])
+
+        self.assertEqual(self.workspace.paths, [self.second, self.first])
+        self.assertEqual([row.target.name for row in self.workspace.rows], ["second_001.txt", "first_002.txt"])
+
+    def test_reordering_paths_rejects_incomplete_or_duplicate_lists(self):
+        self.workspace.add_paths([self.first, self.second])
+
+        self.workspace.reorder_paths([self.second])
+        self.workspace.reorder_paths([self.second, self.second])
+
+        self.assertEqual(self.workspace.paths, [self.first, self.second])
+
     def test_refresh_detects_external_changes_without_changing_rules(self):
         rules = Rules(prefix="x")
         self.workspace.add_paths([self.first])

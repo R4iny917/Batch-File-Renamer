@@ -27,6 +27,14 @@ class Workspace:
         self.paths = list(paths)
         self.refresh()
 
+    def reorder_paths(self, paths: Iterable[str | Path]) -> None:
+        reordered = [Path(path) for path in paths]
+        current = {path_key(path) for path in self.paths}
+        supplied = {path_key(path) for path in reordered}
+        if len(reordered) != len(self.paths) or supplied != current:
+            return
+        self.set_paths(reordered)
+
     def remove_rows(self, selected: set[int]) -> None:
         self.set_paths(path for index, path in enumerate(self.paths) if index not in selected)
 

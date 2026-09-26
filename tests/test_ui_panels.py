@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PySide6.QtCore import QPoint, QMimeData, Qt, QUrl
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication
 
@@ -66,6 +68,26 @@ class PanelTests(unittest.TestCase):
             self.assertEqual(panel.original_name.text(), "")
             self.assertFalse(panel.remove_button.isEnabled())
             self.assertFalse(panel.clear_button.isEnabled())
+
+    def test_external_file_drag_shows_and_hides_drop_overlay(self):
+        panel = PreviewPanel()
+        self.addCleanup(panel.close)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.txt"
+            path.write_text("sample")
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(str(path))])
+            event = QDragEnterEvent(
+                QPoint(20, 20), Qt.DropAction.CopyAction, mime,
+                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+            )
+
+            panel.table.dragEnterEvent(event)
+            self.assertTrue(event.isAccepted())
+            self.assertFalse(panel.table.drop_overlay.isHidden())
+
+            panel.table.dragLeaveEvent(QDragLeaveEvent())
+            self.assertFalse(panel.table.drop_overlay.isVisible())
 
 
 if __name__ == "__main__":

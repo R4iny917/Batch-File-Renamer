@@ -6,8 +6,8 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from PySide6.QtCore import QRect, QEvent, Qt, QTimer
-from PySide6.QtGui import QFocusEvent
+from PySide6.QtCore import QPointF, QRect, QEvent, QMimeData, Qt, QTimer, QUrl
+from PySide6.QtGui import QDropEvent, QFocusEvent
 from PySide6.QtTest import QTest
 
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -51,6 +51,54 @@ class AppTests(unittest.TestCase):
         self.window.remove_selected()
         self.assertEqual(self.window.preview_panel.table.rowCount(), 0)
         self.assertFalse(self.window.execute_button.isEnabled())
+
+    def test_dropping_local_files_adds_them_and_deduplicates(self):
+        second = self.root / "second.txt"
+        second.write_bytes(b"second")
+        folder = self.root / "folder"
+        folder.mkdir()
+        self.window.add_paths([self.source])
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(self.source)), QUrl.fromLocalFile(str(second)),
+                      QUrl.fromLocalFile(str(folder))])
+        event = QDropEvent(
+            QPointF(0, 0), Qt.DropAction.CopyAction, mime,
+            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+        )
+
+        self.window.preview_panel.table.dropEvent(event)
+
+        self.assertTrue(event.isAccepted())
+        self.assertEqual(self.window.workspace.paths, [self.source, second])
+        self.assertEqual(self.window.preview_panel.table.rowCount(), 2)
+
+    def test_dropping_files_onto_window_adds_them(self):
+        second = self.root / "second.txt"
+        second.write_bytes(b"second")
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(second))])
+        event = QDropEvent(
+            QPointF(0, 0), Qt.DropAction.CopyAction, mime,
+            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+        )
+
+        self.window.dropEvent(event)
+
+        self.assertTrue(event.isAccepted())
+        self.assertEqual(self.window.workspace.paths, [second])
+
+    def test_reordered_table_paths_update_visible_preview_and_numbering(self):
+        second = self.root / "second.txt"
+        second.write_bytes(b"second")
+        self.window.add_paths([self.source, second])
+        self.window.rules_panel.numbering.setChecked(True)
+
+        self.window.preview_panel.table.order_changed.emit([str(second), str(self.source)])
+
+        self.assertEqual(self.window.workspace.paths, [second, self.source])
+        self.assertEqual(self.window.preview_panel.table.item(0, 0).text(), "second.txt")
+        self.assertEqual(self.window.preview_panel.table.item(0, 1).text(), "second_001.txt")
+        self.assertEqual(self.window.preview_panel.table.item(1, 1).text(), "照片_002.JPG")
 
     def test_conflict_disables_execution(self):
         (self.root / "x照片.JPG").write_bytes(b"existing")

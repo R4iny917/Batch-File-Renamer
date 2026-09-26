@@ -24,6 +24,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Batch File Renamer")
         self.setWindowIcon(QIcon(str(APP_ICON)))
+        self.setAcceptDrops(True)
         self.setMinimumSize(760, 420)
         self.setStyleSheet(STYLE)
         self.workspace = workspace if workspace is not None else Workspace()
@@ -93,6 +94,8 @@ class MainWindow(QMainWindow):
         self.preview_panel.refresh_requested.connect(self.refresh_preview)
         self.preview_panel.remove_requested.connect(self.remove_selected)
         self.preview_panel.clear_requested.connect(lambda: self.set_paths([]))
+        self.preview_panel.table.files_dropped.connect(self.add_paths)
+        self.preview_panel.table.order_changed.connect(self.reorder_paths)
         self.preview_panel.find_requested.connect(self.rules_panel.fill_find)
         self.preview_panel.example_changed.connect(self.rules_panel.show_example)
 
@@ -110,12 +113,34 @@ class MainWindow(QMainWindow):
         files, _ = QFileDialog.getOpenFileNames(self, "选择需要改名的文件", "", "所有文件 (*)")
         self.add_paths(files)
 
+    def dragEnterEvent(self, event):
+        if any(url.isLocalFile() and Path(url.toLocalFile()).is_file() for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        paths = [url.toLocalFile() for url in event.mimeData().urls()
+                 if url.isLocalFile() and Path(url.toLocalFile()).is_file()]
+        if paths:
+            self.add_paths(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
     def add_paths(self, paths: Iterable[str | Path]) -> None:
         self.workspace.add_paths(paths)
         self.render_preview()
 
     def set_paths(self, paths: Iterable[Path]) -> None:
         self.workspace.set_paths(paths)
+        self.render_preview()
+
+    def reorder_paths(self, paths: Iterable[str | Path]) -> None:
+        self.workspace.reorder_paths(paths)
         self.render_preview()
 
     def remove_selected(self):
